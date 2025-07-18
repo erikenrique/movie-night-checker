@@ -69,59 +69,30 @@ async def post_poll():
                 await message.add_reaction(emoji)
             await message.add_reaction(HOST_EMOJI)
 
-            await message.pin()  # Pin the message
+            try:
+                await message.pin() # Pin the message
+            except discord.Forbidden:
+                print("⚠️ Missing permission to pin the message.")
+
             poll_message_id = message.id
             print(f"📌 Poll posted :3 (message ID {poll_message_id})")
 
 # === Tally Votes on Tuesday at 12:00 PM ET ===
-@tasks.loop(time=datetime.time(hour=12, minute=0, tzinfo=eastern))
+@tasks.loop(time=datetime.time(hour=21, minute=0, tzinfo=eastern))  # Sunday at 9 PM ET
 async def tally_votes():
     global poll_message_id
-    now = datetime.datetime.now(eastern)
-    if now.weekday() == 1 and poll_message_id:  # Tuesday
-        channel = bot.get_channel(CHANNEL_ID)
-        try:
-            message = await channel.fetch_message(poll_message_id)
-            counts = {emoji: 0 for emoji in DAYS}
-            hosts = []
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel or not poll_message_id:
+        print("Missing channel or poll_message_id.")
+        return
 
-            for reaction in message.reactions:
-                users = [user async for user in reaction.users()]
-                voters = [u for u in users if not u.bot]
+    message = await channel.fetch_message(poll_message_id)
+    top_day, top_voters, hosts = await collect_poll_data(message)
+    await send_poll_results(channel, message, top_day, top_voters, hosts, ping_everyone=True)
 
-                if reaction.emoji in DAYS:
-                    counts[reaction.emoji] = len(voters)
-                elif reaction.emoji == HOST_EMOJI:
-                    hosts = [u.mention for u in voters]
 
-            max_votes = max(counts.values())
-            winners = [DAYS[e] for e, v in counts.items() if v == max_votes and max_votes > 0]
-
-            embed = discord.Embed(
-                title="📊 Movie Night Poll Results",
-                color=discord.Color.green()
-            )
-            if winners:
-                embed.add_field(
-                    name="🏆 Top pick(s) for Movie Night:",
-                    value=f"{', '.join(winners)} with {max_votes} vote(s)!",
-                    inline=False
-                )
-            else:
-                embed.add_field(name="No one voted 😢", value="Better luck next week!", inline=False)
-
-            if hosts:
-                embed.add_field(name="✅ Host volunteers:", value=", ".join(hosts), inline=False)
-            else:
-                embed.add_field(name="✅ Host volunteers:", value="No one volunteered yet.", inline=False)
-
-            await channel.send(content="@everyone", embed=embed)
-
-        except Exception as e:
-            await channel.send(f"⚠️ Couldn’t tally the poll: {e}")
-        finally:
-            await message.unpin()
-            poll_message_id = None
+    # Reset poll message ID for next week
+    poll_message_id = None
 
 
 # === Manual Test Command ===
@@ -156,74 +127,95 @@ async def testpoll(ctx):
         await message.add_reaction(emoji)
     await message.add_reaction(HOST_EMOJI)
 
-    await message.pin()  # Pin the message
+    try:
+        await message.pin()
+    except discord.Forbidden:
+        print("⚠️ Missing permission to pin the message.")
+
     poll_message_id = message.id
     await ctx.send("✅ Test poll posted.")
 
 
 @bot.command()
 async def tallynow(ctx):
-    """Manually trigger tallying of the current poll (like Tuesday auto mode)"""
+    """Manually trigger the movie night poll tally."""
     global poll_message_id
-    if ctx.channel.id != CHANNEL_ID:
-        return await ctx.send("⚠️ You can only run this in the movie night channel.")
-    if not poll_message_id:
-        return await ctx.send("⚠️ No active poll found.")
+    await ctx.send("🔵 Tallying votes now!")
 
-    try:
-        message = await ctx.channel.fetch_message(poll_message_id)
-        counts = {emoji: 0 for emoji in DAYS}
-        voters_by_emoji = {emoji: [] for emoji in DAYS}
-        hosts = []
+    message = await ctx.fetch_message(poll_message_id)
+    top_day, top_voters, hosts = await collect_poll_data(message)
+    await send_poll_results(ctx, message, top_day, top_voters, hosts, ping_everyone=False)
 
-        for reaction in message.reactions:
-            users = [user async for user in reaction.users()]
-            real_users = [u for u in users if not u.bot]
 
-            if reaction.emoji in DAYS:
-                counts[reaction.emoji] = len(real_users)
-                voters_by_emoji[reaction.emoji] = real_users
-            elif reaction.emoji == HOST_EMOJI:
-                hosts = [u.mention for u in real_users]
+## helper functions
 
-        max_votes = max(counts.values())
-        winners = [e for e, v in counts.items() if v == max_votes and max_votes > 0]
+async def collect_poll_data(message):
+    votes = {day: [] for day in DAYS.keys()}
+    host_volunteers = []
 
-        embed = discord.Embed(
-            title="📊 Movie Night Poll Results",
-            color=discord.Color.green()
+    for reaction in message.reactions:
+        if reaction.emoji in DAYS:
+            async for user in reaction.users():
+                if not user.bot:
+                    votes[reaction.emoji].append(user)
+        elif reaction.emoji == "✅":
+            async for user in reaction.users():
+                if not user.bot:
+                    host_volunteers.append(user)
+
+    sorted_votes = sorted(votes.items(), key=lambda x: len(x[1]), reverse=True)
+    if sorted_votes and len(sorted_votes[0][1]) > 0:
+        top_day = sorted_votes[0][0]
+        top_voters = sorted_votes[0][1]
+    else:
+        top_day = None
+        top_voters = []
+
+    return top_day, top_voters, host_volunteers
+
+
+async def send_poll_results(channel, poll_message, top_day, top_voters, hosts, ping_everyone=False):
+    embed = discord.Embed(
+        title="📊 Movie Night Poll Results",
+        color=discord.Color.green()
+    )
+
+    clean_day = DAYS.get(top_day, top_day)
+    if isinstance(top_day, tuple):
+        clean_day = top_day[1]
+
+    embed.add_field(
+        name="🏆 Top pick(s) for Movie Night:",
+        value=f"**{clean_day}**\nwith {len(top_voters)} vote(s)!" if top_voters else "No votes recorded.",
+        inline=False
+    )
+
+    if top_voters:
+        voter_mentions = "\n".join(v.mention for v in top_voters)
+        embed.add_field(
+            name="🗳️ with votes from:",
+            value=voter_mentions,
+            inline=False
         )
 
-        if winners:
-            for emoji in winners:
-                day = DAYS[emoji]
-                user_mentions = " ".join([u.mention for u in voters_by_emoji[emoji]])
-                embed.add_field(
-                    name=f"🏆 **{day}**",
-                    value=f"with votes from: {user_mentions if user_mentions else 'No one? 😬'}",
-                    inline=False
-                )
-        else:
-            embed.add_field(name="No one voted 😢", value="Better luck next week!", inline=False)
+    if hosts:
+        host_mentions = "\n".join(h.mention for h in hosts)
+        embed.add_field(
+            name="✅ Host volunteers:",
+            value=host_mentions,
+            inline=False
+        )
 
-        if hosts:
-            embed.add_field(name="✅ Host volunteers:", value=", ".join(hosts), inline=False)
-        else:
-            embed.add_field(name="✅ Host volunteers:", value="No one volunteered yet.", inline=False)
+    await channel.send(
+        content="@everyone" if ping_everyone else "@ insert-role-here",
+        embed=embed
+    )
 
-        await ctx.send(content="@ insert-role-here", embed=embed)
-
-        # Optional: Ping hosts in a separate message for visibility
-        if hosts:
-            await ctx.send(f"📣 Pinging host(s): {' '.join(hosts)}")
-
-    except Exception as e:
-        await ctx.send(f"⚠️ Couldn’t tally the poll: {e}")
-    finally:
-        poll_message_id = None  # Reset after tally
-
-
-
+    # ⬇️ Unpin the original poll message
+    try:
+        await poll_message.unpin()
+    except discord.Forbidden:
+        print("⚠️ Missing permission to unpin poll message.")
 
 
 
