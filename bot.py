@@ -149,7 +149,7 @@ async def testpoll(ctx):
     embed.set_thumbnail(url="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/54.png")
 
     message = await ctx.send(
-        content="@everyone",
+        content="@ insert-role-here",
         embed=embed
     )
     for emoji in DAYS:
@@ -211,7 +211,7 @@ async def tallynow(ctx):
         else:
             embed.add_field(name="✅ Host volunteers:", value="No one volunteered yet.", inline=False)
 
-        await ctx.send(content="@everyone", embed=embed)
+        await ctx.send(content="@ insert-role-here", embed=embed)
 
         # Optional: Ping hosts in a separate message for visibility
         if hosts:
