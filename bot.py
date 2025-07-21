@@ -5,6 +5,8 @@ import pytz
 import os
 import asyncio
 from dotenv import load_dotenv
+from aiohttp import web
+import threading
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -217,6 +219,17 @@ async def send_poll_results(channel, poll_message, top_day, top_voters, hosts, p
     except discord.Forbidden:
         print("⚠️ Missing permission to unpin poll message.")
 
-
-
 bot.run(TOKEN)
+
+## HTTP server
+
+async def handle(request):
+    return web.Response(text="✅ Bot is running")
+
+def run_web():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    web.run_app(app, port=8080)
+
+# Start web server in separate thread
+threading.Thread(target=run_web).start()
