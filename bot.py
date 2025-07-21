@@ -219,17 +219,22 @@ async def send_poll_results(channel, poll_message, top_day, top_voters, hosts, p
     except discord.Forbidden:
         print("⚠️ Missing permission to unpin poll message.")
 
-bot.run(TOKEN)
-
-## HTTP server
+## HTTP server setup for Render
 
 async def handle(request):
     return web.Response(text="✅ Bot is running")
 
-def run_web():
+async def start_web_server():
     app = web.Application()
-    app.add_routes([web.get('/', handle)])
-    web.run_app(app, port=8080)
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, port=8080)
+    await site.start()
 
-# Start web server in separate thread
-threading.Thread(target=run_web).start()
+# Main runner
+async def main():
+    await start_web_server()
+    await bot.start(TOKEN)
+
+asyncio.run(main())
